@@ -7,7 +7,7 @@ import joblib
 # CONFIGURATION
 # ============================================================
 
-MODEL_PATH = "models/hallucination_firewall_svm.pkl"
+MODEL_PATH = "hallucination_firewall_svm.pkl"
 
 THRESHOLD = 0.30
 
