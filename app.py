@@ -181,3 +181,5 @@ with st.sidebar:
 
     st.caption("Multimodal Hallucination Firewall")
     st.caption("AI Answer Verification System")
+    st.title("TEST - Multimodal Hallucination Firewall")
+    st.write("If you can see this, the main page is working.")
