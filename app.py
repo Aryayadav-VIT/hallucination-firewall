@@ -165,4 +165,19 @@ with st.sidebar:
 
     st.markdown("### Navigation")
 
-    st.markdown("🏠 **
+    st.markdown("🏠 **Verify Answer**")
+    st.markdown("🔬 **Evidence Analysis**")
+    st.markdown("🧠 **How It Works**")
+    st.markdown("⚙️ **Model Information**")
+
+    st.divider()
+
+    st.markdown("### System Status")
+
+    st.success("🟢 CLIP Engine Ready")
+    st.success("🟢 SVM Classifier Ready")
+
+    st.divider()
+
+    st.caption("Multimodal Hallucination Firewall")
+    st.caption("AI Answer Verification System")
