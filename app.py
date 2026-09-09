@@ -5,7 +5,6 @@ import numpy as np
 import joblib
 from PIL import Image
 
-
 # ============================================================
 # PAGE CONFIG
 # ============================================================
@@ -13,401 +12,209 @@ from PIL import Image
 st.set_page_config(
     page_title="Multimodal Hallucination Firewall",
     page_icon="🛡️",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-
 # ============================================================
-# TITLE
-# ============================================================
-
-st.title("🛡️ Multimodal Hallucination Firewall")
-
-st.markdown(
-    """
-    ### Evidence-Based AI Answer Verification
-
-    Upload an image, enter a question, and provide an AI-generated
-    answer. The system automatically extracts multimodal evidence
-    features using CLIP and uses a trained SVM classifier to detect
-    potential hallucinations.
-    """
-)
-
-st.divider()
-
-
-# ============================================================
-# MODEL PATH
+# CUSTOM CSS
 # ============================================================
 
-MODEL_PATH = "hallucination_firewall_svm.pkl"
-
-
-# ============================================================
-# LOAD SVM
-# ============================================================
-
-@st.cache_resource
-def load_firewall_model():
-
-    model = joblib.load(MODEL_PATH)
-
-    return model
-
-
-# ============================================================
-# LOAD CLIP
-# ============================================================
-
-@st.cache_resource
-def load_clip_model():
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        "ViT-B-32",
-        pretrained="openai"
-    )
-
-    tokenizer = open_clip.get_tokenizer("ViT-B-32")
-
-    model = model.to(device)
-    model.eval()
-
-    return model, preprocess, tokenizer, device
-
-
-# ============================================================
-# FEATURE EXTRACTION
-# ============================================================
-
-def calculate_features(image, question, answer):
-
-    clip_model, preprocess, tokenizer, device = load_clip_model()
-
-    # --------------------------------------------------------
-    # IMAGE
-    # --------------------------------------------------------
-
-    image_input = preprocess(image).unsqueeze(0).to(device)
-
-    # --------------------------------------------------------
-    # TEXT
-    # --------------------------------------------------------
-
-    question_tokens = tokenizer([question]).to(device)
-    answer_tokens = tokenizer([answer]).to(device)
-
-    # --------------------------------------------------------
-    # CLIP EMBEDDINGS
-    # --------------------------------------------------------
-
-    with torch.no_grad():
-
-        image_features = clip_model.encode_image(image_input)
-
-        question_features = clip_model.encode_text(question_tokens)
-
-        answer_features = clip_model.encode_text(answer_tokens)
-
-        # Normalize embeddings
-        image_features = image_features / image_features.norm(
-            dim=-1,
-            keepdim=True
-        )
-
-        question_features = question_features / question_features.norm(
-            dim=-1,
-            keepdim=True
-        )
-
-        answer_features = answer_features / answer_features.norm(
-            dim=-1,
-            keepdim=True
-        )
-
-        # ----------------------------------------------------
-        # IMAGE-QUESTION SIMILARITY
-        # ----------------------------------------------------
-
-        image_question_similarity = (
-            image_features @ question_features.T
-        ).item()
-
-        # ----------------------------------------------------
-        # IMAGE-ANSWER SIMILARITY
-        # ----------------------------------------------------
-
-        image_answer_similarity = (
-            image_features @ answer_features.T
-        ).item()
-
-        # ----------------------------------------------------
-        # MULTIMODAL GROUNDING SCORE
-        # ----------------------------------------------------
-
-        multimodal_grounding_score = (
-            image_question_similarity +
-            image_answer_similarity
-        ) / 2
-
-    return (
-        image_question_similarity,
-        image_answer_similarity,
-        multimodal_grounding_score
-    )
-
-
-# ============================================================
-# LOAD FIREWALL MODEL
-# ============================================================
-
-try:
-
-    firewall_model = load_firewall_model()
-
-    st.success("✅ Hallucination Firewall model loaded")
-
-except Exception as e:
-
-    st.error(f"❌ Could not load firewall model: {e}")
-
-    st.stop()
-
-
-# ============================================================
-# USER INPUT
-# ============================================================
-
-st.subheader("📷 1. Upload Image")
-
-uploaded_file = st.file_uploader(
-    "Upload an image",
-    type=["jpg", "jpeg", "png", "webp"]
-)
-
-
-if uploaded_file is not None:
-
-    image = Image.open(uploaded_file).convert("RGB")
-
-    st.image(
-        image,
-        caption="Uploaded Image",
-        width=500
-    )
-
-
-st.subheader("❓ 2. Enter Question")
-
-question = st.text_input(
-    "Question",
-    placeholder="Example: Is there a dog in the image?"
-)
-
-
-st.subheader("🤖 3. Enter AI-Generated Answer")
-
-answer = st.text_area(
-    "AI Answer",
-    placeholder="Example: Yes, there is a dog in the image.",
-    height=120
-)
-
-
-st.divider()
-
-
-# ============================================================
-# CHECK ANSWER
-# ============================================================
-
-if st.button(
-    "🔍 CHECK ANSWER",
-    use_container_width=True
-):
-
-    if uploaded_file is None:
-
-        st.warning("Please upload an image.")
-
-        st.stop()
-
-    if not question.strip():
-
-        st.warning("Please enter a question.")
-
-        st.stop()
-
-    if not answer.strip():
-
-        st.warning("Please enter the AI-generated answer.")
-
-        st.stop()
-
-
-    # --------------------------------------------------------
-    # CALCULATE CLIP FEATURES
-    # --------------------------------------------------------
-
-    with st.spinner(
-        "Analyzing image and extracting CLIP evidence features..."
-    ):
-
-        (
-            image_question_similarity,
-            image_answer_similarity,
-            multimodal_grounding_score
-        ) = calculate_features(
-            image,
-            question,
-            answer
-        )
-
-
-    # --------------------------------------------------------
-    # PREPARE FEATURES FOR SVM
-    # --------------------------------------------------------
-
-    X_input = np.array([[
-        image_question_similarity,
-        image_answer_similarity,
-        multimodal_grounding_score
-    ]])
-
-
-    # --------------------------------------------------------
-    # MODEL PREDICTION
-    # --------------------------------------------------------
-
-    prediction = firewall_model.predict(X_input)[0]
-
-
-    # --------------------------------------------------------
-    # HALLUCINATION RISK
-    # --------------------------------------------------------
-
-    if hasattr(firewall_model, "predict_proba"):
-
-        probabilities = firewall_model.predict_proba(X_input)[0]
-
-        classes = list(firewall_model.classes_)
-
-        # Project convention:
-        # class 1 = supported
-        # class 0 = hallucinated
-
-        if 0 in classes:
-
-            hallucination_probability = probabilities[
-                classes.index(0)
-            ]
-
-        else:
-
-            hallucination_probability = 1 - probabilities[
-                classes.index(1)
-            ]
-
-    else:
-
-        hallucination_probability = 0.0
-
-
-    # --------------------------------------------------------
-    # DECISION
-    # --------------------------------------------------------
-
-    THRESHOLD = 0.30
-
-    if hallucination_probability >= THRESHOLD:
-
-        decision = "HALLUCINATED"
-
-    else:
-
-        decision = "SUPPORTED"
-
-
-    # ========================================================
-    # DISPLAY FEATURES
-    # ========================================================
-
-    st.subheader("🧠 CLIP-Derived Evidence Features")
-
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-
-        st.metric(
-            "Image–Question Similarity",
-            f"{image_question_similarity:.4f}"
-        )
-
-    with col2:
-
-        st.metric(
-            "Image–Answer Similarity",
-            f"{image_answer_similarity:.4f}"
-        )
-
-    with col3:
-
-        st.metric(
-            "Multimodal Grounding Score",
-            f"{multimodal_grounding_score:.4f}"
-        )
-
-
-    # ========================================================
-    # RESULT
-    # ========================================================
-
-    st.divider()
-
-    st.subheader("🛡️ Firewall Decision")
-
-
-    if decision == "HALLUCINATED":
-
-        st.error(
-            "🔴 HALLUCINATED / POTENTIALLY UNSUPPORTED"
-        )
-
-    else:
-
-        st.success(
-            "🟢 SUPPORTED / GROUNDED"
-        )
-
-
-    # ========================================================
-    # RISK SCORE
-    # ========================================================
-
-    st.metric(
-        "Hallucination Risk",
-        f"{hallucination_probability * 100:.2f}%"
-    )
-
-
-    # ========================================================
-    # EXPLANATION
-    # ========================================================
-
-    st.info(
-        f"""
-        **How the decision was made**
-
-        CLIP compared the uploaded image with the question and
-        generated answer.
-
-        The resulting evidence features were passed to the
-        trained SVM hallucination classifier.
-
-        **Decision threshold:** {THRESHOLD}
-
-        **Firewall result:** {decision}
-        """
-    )
+st.markdown("""
+<style>
+
+    /* ---------- GLOBAL ---------- */
+
+    .stApp {
+        background:
+            radial-gradient(circle at 10% 10%, rgba(59,130,246,0.10), transparent 25%),
+            radial-gradient(circle at 90% 20%, rgba(139,92,246,0.08), transparent 25%),
+            #07111F;
+        color: #F8FAFC;
+    }
+
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 3rem;
+        max-width: 1250px;
+    }
+
+    h1, h2, h3 {
+        color: #F8FAFC !important;
+    }
+
+    p, label {
+        color: #CBD5E1 !important;
+    }
+
+    /* ---------- SIDEBAR ---------- */
+
+    section[data-testid="stSidebar"] {
+        background: #081321;
+        border-right: 1px solid #1E3A5F;
+    }
+
+    section[data-testid="stSidebar"] h1 {
+        color: #F8FAFC !important;
+    }
+
+    /* ---------- HERO ---------- */
+
+    .hero {
+        background: linear-gradient(
+            135deg,
+            rgba(15,27,45,0.95),
+            rgba(17,24,39,0.92)
+        );
+        border: 1px solid #1E3A5F;
+        border-radius: 22px;
+        padding: 30px 35px;
+        margin-bottom: 25px;
+        box-shadow: 0 15px 40px rgba(0,0,0,0.25);
+    }
+
+    .hero-title {
+        font-size: 2.4rem;
+        font-weight: 800;
+        margin-bottom: 8px;
+        color: #F8FAFC;
+    }
+
+    .hero-subtitle {
+        font-size: 1.05rem;
+        color: #94A3B8;
+        margin-bottom: 18px;
+    }
+
+    .badge {
+        display: inline-block;
+        padding: 7px 14px;
+        border-radius: 999px;
+        background: rgba(59,130,246,0.12);
+        border: 1px solid rgba(59,130,246,0.35);
+        color: #60A5FA;
+        font-size: 0.85rem;
+        font-weight: 600;
+        margin-right: 8px;
+    }
+
+    .online {
+        display: inline-block;
+        padding: 7px 14px;
+        border-radius: 999px;
+        background: rgba(34,197,94,0.10);
+        border: 1px solid rgba(34,197,94,0.30);
+        color: #4ADE80;
+        font-size: 0.85rem;
+        font-weight: 600;
+    }
+
+    /* ---------- CARDS ---------- */
+
+    .card {
+        background: rgba(15,27,45,0.88);
+        border: 1px solid #1E3A5F;
+        border-radius: 18px;
+        padding: 22px;
+        margin-bottom: 18px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.18);
+    }
+
+    .card-title {
+        font-size: 1.05rem;
+        font-weight: 700;
+        color: #F8FAFC;
+        margin-bottom: 12px;
+    }
+
+    .card-description {
+        color: #94A3B8;
+        font-size: 0.9rem;
+    }
+
+    /* ---------- INPUTS ---------- */
+
+    .stTextInput input,
+    .stTextArea textarea {
+        background: #0B1728 !important;
+        color: #F8FAFC !important;
+        border: 1px solid #274568 !important;
+        border-radius: 12px !important;
+    }
+
+    .stTextInput input:focus,
+    .stTextArea textarea:focus {
+        border-color: #3B82F6 !important;
+        box-shadow: 0 0 0 1px #3B82F6 !important;
+    }
+
+    /* ---------- UPLOADER ---------- */
+
+    [data-testid="stFileUploader"] {
+        background: #0B1728;
+        border: 1px dashed #315579;
+        border-radius: 14px;
+        padding: 8px;
+    }
+
+    /* ---------- BUTTON ---------- */
+
+    .stButton > button {
+        width: 100%;
+        background: linear-gradient(90deg, #2563EB, #7C3AED);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        padding: 13px 20px;
+        font-size: 1rem;
+        font-weight: 700;
+        transition: 0.2s ease;
+    }
+
+    .stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(59,130,246,0.30);
+    }
+
+    /* ---------- VERDICT ---------- */
+
+    .verdict {
+        border-radius: 22px;
+        padding: 35px;
+        text-align: center;
+        margin: 25px 0;
+    }
+
+    .verdict-supported {
+        background: linear-gradient(
+            135deg,
+            rgba(20,83,45,0.45),
+            rgba(15,27,45,0.95)
+        );
+        border: 1px solid rgba(34,197,94,0.45);
+        box-shadow: 0 15px 45px rgba(34,197,94,0.08);
+    }
+
+    .verdict-hallucinated {
+        background: linear-gradient(
+            135deg,
+            rgba(127,29,29,0.45),
+            rgba(15,27,45,0.95)
+        );
+        border: 1px solid rgba(239,68,68,0.45);
+        box-shadow: 0 15px 45px rgba(239,68,68,0.08);
+    }
+
+    .verdict-uncertain {
+        background: linear-gradient(
+            135deg,
+            rgba(120,53,15,0.45),
+            rgba(15,27,45,0.95)
+        );
+        border: 1px solid rgba(245,158,11,0.45);
+    }
+
+    .verdict-label {
+        font-size: 2.2rem;
+        font-weight: 850;
+        margin: 8px 0 15px
