@@ -1,128 +1,160 @@
-        st.metric(
-            "Grounding Score",
-            f"{multimodal_grounding_score:.4f}"
+    # OBJECT EVIDENCE
+    # --------------------------------------------------------
+
+    with st.spinner("🔎 Checking object-level visual evidence..."):
+        object_evidence = check_object_evidence(
+            image,
+            question,
+            answer
         )
 
-    # ========================================================
-    # EXPLANATION
-    # ========================================================
+    # --------------------------------------------------------
+    # FINAL DECISION
+    # --------------------------------------------------------
 
-    st.subheader("🧠 Why did the Firewall decide this?")
+    svm_decision = (
+        hallucination_probability >= threshold
+    )
 
-    if object_contradiction:
+    # Object contradiction is a safety override.
+    object_override = object_evidence["contradiction"]
 
-        st.error(
-            f"""
-### 🔴 Object-level contradiction detected
+    final_hallucination = svm_decision or object_override
 
-The queried object is **{object_name}**.
-
-The visual evidence indicates that the object is **present**,
-but the AI answer claims that it is **absent**.
-
-**Detected Type:** Object Presence Hallucination
-
-**Object Evidence Confidence:** {object_confidence * 100:.1f}%
-
-**SVM Hallucination Probability:** {risk_percent:.1f}%
-
-The firewall therefore overrides the SVM-only decision and flags
-the answer as a potential hallucination.
-"""
+    if final_hallucination:
+        decision = "HALLUCINATED"
+        verdict_message = (
+            "The AI answer is not sufficiently supported "
+            "by the visual evidence."
         )
-
-    elif decision == "SUPPORTED":
-
-        st.success(
-            f"""
-### 🟢 Visual evidence supports the answer
-
-The AI answer shows sufficient alignment with the uploaded image.
-
-**Grounding Score:** {multimodal_grounding_score:.4f}
-
-**SVM Hallucination Risk:** {risk_percent:.1f}%
-
-**Firewall Status:** Supported
-
-The calculated SVM risk is below the firewall threshold of
-**{THRESHOLD:.2f}**, and no strong object-level contradiction was found.
-"""
-        )
-
     else:
+        decision = "SUPPORTED"
+        verdict_message = (
+            "The AI answer is consistent with "
+            "the available visual evidence."
+        )
 
+    risk_percent = hallucination_probability * 100
+
+    hallucination_type = determine_hallucination_type(
+        question,
+        answer,
+        image_answer_similarity,
+        hallucination_probability,
+        object_evidence
+    )
+
+    # ========================================================
+    # RESULT
+    # ========================================================
+
+    st.divider()
+    st.header("🛡️ Firewall Verdict")
+
+    if decision == "SUPPORTED":
+        st.success(
+            "## 🟢 SUPPORTED\n\n" + verdict_message
+        )
+    else:
         st.error(
-            f"""
-### 🔴 Potential hallucination detected
+            "## 🔴 HALLUCINATED\n\n" + verdict_message
+        )
 
-The AI answer is not sufficiently grounded in the visual evidence.
-
-**Detected Type:** {hallucination_type}
-
-**Image–Answer Similarity:** {image_answer_similarity:.4f}
-
-**Grounding Score:** {multimodal_grounding_score:.4f}
-
-**SVM Hallucination Risk:** {risk_percent:.1f}%
-
-The calculated SVM risk exceeds the firewall threshold of
-**{THRESHOLD:.2f}**.
-
-**Recommendation:** Review the AI answer against the uploaded image before accepting it.
-"""
+    if decision == "HALLUCINATED":
+        st.warning(
+            f"🔎 **Hallucination Type:** {hallucination_type}"
+        )
+    else:
+        st.info(
+            "🔎 **Verification Type:** Visually Supported Answer"
         )
 
     # ========================================================
-    # PIPELINE
+    # OBJECT EVIDENCE RESULT
     # ========================================================
 
-    st.subheader("⚙️ Verification Pipeline")
+    st.subheader("🔎 Object-Level Evidence")
 
-    p1, p2, p3, p4, p5 = st.columns(5)
+    if object_evidence["object"] is None:
+        st.info(
+            "No recognizable object was extracted from the question. "
+            "The decision relies on CLIP multimodal grounding + SVM."
+        )
+    else:
+        obj = object_evidence["object"]
+        present_score = object_evidence["present_score"]
+        absent_score = object_evidence["absent_score"]
 
-    with p1:
-        st.info("📷 **IMAGE**\n\nVisual Evidence")
+        obj1, obj2, obj3 = st.columns(3)
 
-    with p2:
-        st.info("🧠 **CLIP**\n\nMultimodal Features")
+        with obj1:
+            st.metric(
+                "Queried Object",
+                obj.title()
+            )
 
-    with p3:
-        st.info("🔎 **OBJECT**\n\nVisual Evidence")
+        with obj2:
+            st.metric(
+                "Object-Present Score",
+                f"{present_score:.4f}"
+            )
 
-    with p4:
-        st.info("⚡ **SVM**\n\nRisk Prediction")
+        with obj3:
+            st.metric(
+                "Object-Absent Score",
+                f"{absent_score:.4f}"
+            )
 
-    with p5:
-        if decision == "SUPPORTED":
-            st.success("🟢 **SUPPORTED**\n\nVerified")
+        if object_evidence["contradiction"]:
+            st.error(
+                f"⚠️ Visual evidence conflicts with the AI answer: "
+                f"the image shows stronger CLIP evidence for a "
+                f"**{obj}**, while the answer denies its presence."
+            )
+        elif object_evidence["present"]:
+            st.info(
+                f"Visual evidence is more consistent with the "
+                f"presence of a **{obj}**."
+            )
         else:
-            st.error("🔴 **FLAGGED**\n\nPotential Hallucination")
+            st.info(
+                f"Visual evidence does not provide strong evidence "
+                f"for the presence of a **{obj}**."
+            )
 
+    # ========================================================
+    # RISK
+    # ========================================================
 
-# ============================================================
-# MODEL INFORMATION
-# ============================================================
+    st.subheader("📊 Hallucination Risk")
 
-st.divider()
-st.header("⚙️ Model Information")
+    risk_col1, risk_col2 = st.columns([1, 2])
 
-model_col1, model_col2, model_col3 = st.columns(3)
+    with risk_col1:
+        st.metric(
+            "SVM Hallucination Probability",
+            f"{risk_percent:.1f}%"
+        )
 
-with model_col1:
-    st.metric("Vision-Language Model", "CLIP ViT-B/32")
+    with risk_col2:
+        st.progress(
+            min(max(float(hallucination_probability), 0.0), 1.0)
+        )
 
-with model_col2:
-    st.metric("Classifier", "SVM")
+        if risk_percent < 30:
+            st.success(
+                "🟢 LOW RISK — SVM considers the answer well grounded."
+            )
+        elif risk_percent < 60:
+            st.warning(
+                "🟡 MODERATE RISK — Evidence should be reviewed."
+            )
+        else:
+            st.error(
+                "🔴 HIGH RISK — SVM detects substantial hallucination risk."
+            )
 
-with model_col3:
-    st.metric("Firewall Threshold", f"{THRESHOLD:.2f}")
-
-
-# ============================================================
-# FOOTER
-# ============================================================
-
-st.divider()
-st.caption(
-    "🛡️ Multimodal Hallucination Firewall | "
+    if object_override:
+        st.warning(
+            "🛡️ Safety override activated: object-level evidence "
+            "contradicts the AI answer."
