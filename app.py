@@ -4,6 +4,7 @@ import open_clip
 import pandas as pd
 import joblib
 from PIL import Image
+from ultralytics import YOLO
 
 
 # ============================================================
@@ -39,6 +40,13 @@ st.divider()
 
 MODEL_PATH = "hallucination_firewall_svm.pkl"
 
+# ============================================================
+# LOAD OBJECT DETECTOR
+# ============================================================
+
+@st.cache_resource
+def load_object_detector():
+    return YOLO("yolo11n.pt")
 
 # ============================================================
 # LOAD SVM MODEL
@@ -287,16 +295,15 @@ with st.sidebar:
 # ============================================================
 # LOAD MODEL
 # ============================================================
-
 try:
 
     firewall_model = load_firewall_model()
+    object_detector = load_object_detector()
 
 except Exception as e:
 
-    st.error(f"❌ Unable to load the SVM model: {e}")
+    st.error(f"❌ Unable to load the models: {e}")
     st.stop()
-
 
 # ============================================================
 # INPUT SECTION
