@@ -1,7 +1,6 @@
 import streamlit as st
 import torch
 import open_clip
-import numpy as np
 import pandas as pd
 import joblib
 from PIL import Image
@@ -24,9 +23,7 @@ st.set_page_config(
 
 st.title("🛡️ Multimodal Hallucination Firewall")
 
-st.markdown(
-    "### Evidence-Based AI Answer Verification"
-)
+st.markdown("### Evidence-Based AI Answer Verification")
 
 st.caption(
     "Analyze whether an AI-generated answer is supported by "
@@ -34,37 +31,6 @@ st.caption(
 )
 
 st.divider()
-
-
-# ============================================================
-# SIDEBAR
-# ============================================================
-
-with st.sidebar:
-
-    st.header("🛡️ Firewall")
-
-    st.divider()
-
-    st.subheader("System Status")
-
-    st.success("🟢 SVM Classifier Ready")
-    st.success("🟢 CLIP Engine Ready")
-
-    st.divider()
-
-    st.subheader("Pipeline")
-
-    st.write("📷 Image")
-    st.write("❓ Question")
-    st.write("🤖 AI Answer")
-    st.write("🧠 CLIP Features")
-    st.write("⚡ SVM Classifier")
-    st.write("🛡️ Firewall Verdict")
-
-    st.divider()
-
-    st.caption("Multimodal Hallucination Firewall")
 
 
 # ============================================================
@@ -80,7 +46,6 @@ MODEL_PATH = "hallucination_firewall_svm.pkl"
 
 @st.cache_resource
 def load_firewall_model():
-
     return joblib.load(MODEL_PATH)
 
 
@@ -101,7 +66,6 @@ def load_clip_model():
     tokenizer = open_clip.get_tokenizer("ViT-B-32")
 
     model = model.to(device)
-
     model.eval()
 
     return model, preprocess, tokenizer, device
@@ -117,71 +81,37 @@ def calculate_features(image, question, answer):
 
     image_input = preprocess(image).unsqueeze(0).to(device)
 
-    question_tokens = tokenizer(
-        [question]
-    ).to(device)
-
-    answer_tokens = tokenizer(
-        [answer]
-    ).to(device)
+    question_tokens = tokenizer([question]).to(device)
+    answer_tokens = tokenizer([answer]).to(device)
 
     with torch.no_grad():
 
-        image_features = clip_model.encode_image(
-            image_input
-        )
-
-        question_features = clip_model.encode_text(
-            question_tokens
-        )
-
-        answer_features = clip_model.encode_text(
-            answer_tokens
-        )
-
-        # Normalize image embedding
+        image_features = clip_model.encode_image(image_input)
+        question_features = clip_model.encode_text(question_tokens)
+        answer_features = clip_model.encode_text(answer_tokens)
 
         image_features = (
             image_features /
-            image_features.norm(
-                dim=-1,
-                keepdim=True
-            )
+            image_features.norm(dim=-1, keepdim=True)
         )
-
-        # Normalize question embedding
 
         question_features = (
             question_features /
-            question_features.norm(
-                dim=-1,
-                keepdim=True
-            )
+            question_features.norm(dim=-1, keepdim=True)
         )
-
-        # Normalize answer embedding
 
         answer_features = (
             answer_features /
-            answer_features.norm(
-                dim=-1,
-                keepdim=True
-            )
+            answer_features.norm(dim=-1, keepdim=True)
         )
-
-        # Image-question similarity
 
         image_question_similarity = (
             image_features @ question_features.T
         ).item()
 
-        # Image-answer similarity
-
         image_answer_similarity = (
             image_features @ answer_features.T
         ).item()
-
-        # Combined grounding score
 
         multimodal_grounding_score = (
             image_question_similarity +
@@ -196,7 +126,166 @@ def calculate_features(image, question, answer):
 
 
 # ============================================================
-# LOAD FIREWALL MODEL
+# HALLUCINATION TYPE
+# ============================================================
+
+def determine_hallucination_type(
+    question,
+    answer,
+    image_question_similarity,
+    image_answer_similarity,
+    grounding_score,
+    risk
+):
+
+    question_lower = question.lower()
+
+    # Count-related questions
+    count_words = [
+        "how many",
+        "number of",
+        "count",
+        "quantity",
+        "how much"
+    ]
+
+    if any(word in question_lower for word in count_words):
+        return "Count Hallucination"
+
+    # Attribute questions
+    attribute_words = [
+        "color",
+        "colour",
+        "size",
+        "small",
+        "large",
+        "big",
+        "red",
+        "blue",
+        "green",
+        "black",
+        "white"
+    ]
+
+    if any(word in question_lower for word in attribute_words):
+        return "Attribute Hallucination"
+
+    # Spatial questions
+    spatial_words = [
+        "where",
+        "left",
+        "right",
+        "behind",
+        "front",
+        "next to",
+        "near",
+        "beside",
+        "above",
+        "below"
+    ]
+
+    if any(word in question_lower for word in spatial_words):
+        return "Spatial Hallucination"
+
+    # Weak visual grounding
+    if risk >= 0.60:
+
+        if image_answer_similarity < 0.20:
+            return "Object / Content Hallucination"
+
+        return "Unsupported Answer"
+
+    return "General Hallucination"
+
+
+# ============================================================
+# DEMO TEST CASES
+# ============================================================
+
+demo_cases = {
+
+    "Select a demo": {
+        "question": "",
+        "answer": ""
+    },
+
+    "Demo 1 — Supported": {
+        "question": "Is there a dog in the image?",
+        "answer": "Yes, there is a dog in the image."
+    },
+
+    "Demo 2 — Count Hallucination": {
+        "question": "How many dogs are in the image?",
+        "answer": "There are five dogs in the image."
+    },
+
+    "Demo 3 — Attribute Hallucination": {
+        "question": "What color is the dog?",
+        "answer": "The dog is bright purple."
+    },
+
+    "Demo 4 — Unsupported Answer": {
+        "question": "Is there a cat in the image?",
+        "answer": "Yes, there is a cat wearing sunglasses."
+    }
+}
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.header("🛡️ Firewall")
+
+    st.divider()
+
+    st.subheader("🧪 Demo Test Cases")
+
+    selected_demo = st.selectbox(
+        "Choose a test case:",
+        list(demo_cases.keys())
+    )
+
+    st.divider()
+
+    st.subheader("🎚️ Firewall Sensitivity")
+
+    THRESHOLD = st.slider(
+        "Hallucination Threshold",
+        min_value=0.10,
+        max_value=0.90,
+        value=0.30,
+        step=0.05,
+        help="Lower values make the firewall more strict."
+    )
+
+    st.caption(
+        "Lower threshold = stricter verification"
+    )
+
+    st.divider()
+
+    st.subheader("System Status")
+
+    st.success("🟢 SVM Classifier Ready")
+    st.success("🟢 CLIP Engine Ready")
+
+    st.divider()
+
+    st.subheader("Pipeline")
+
+    st.write("📷 Image")
+    st.write("❓ Question")
+    st.write("🤖 AI Answer")
+    st.write("🧠 CLIP Features")
+    st.write("⚡ SVM Classifier")
+    st.write("🛡️ Firewall Verdict")
+
+
+# ============================================================
+# LOAD MODEL
 # ============================================================
 
 try:
@@ -205,10 +294,7 @@ try:
 
 except Exception as e:
 
-    st.error(
-        f"❌ Unable to load the SVM model: {e}"
-    )
-
+    st.error(f"❌ Unable to load the SVM model: {e}")
     st.stop()
 
 
@@ -235,12 +321,7 @@ with left:
 
     uploaded_file = st.file_uploader(
         "Upload image",
-        type=[
-            "jpg",
-            "jpeg",
-            "png",
-            "webp"
-        ]
+        type=["jpg", "jpeg", "png", "webp"]
     )
 
     image = None
@@ -266,15 +347,21 @@ with right:
 
     st.subheader("❓ Question")
 
+    demo_question = demo_cases[selected_demo]["question"]
+
     question = st.text_input(
         "Enter the question",
+        value=demo_question,
         placeholder="Is there a dog in the image?"
     )
 
     st.subheader("🤖 AI-Generated Answer")
 
+    demo_answer = demo_cases[selected_demo]["answer"]
+
     answer = st.text_area(
         "Enter the AI answer",
+        value=demo_answer,
         placeholder="Yes, there is a dog in the image.",
         height=150
     )
@@ -304,26 +391,17 @@ if run_analysis:
 
     if image is None:
 
-        st.warning(
-            "📷 Please upload an image first."
-        )
-
+        st.warning("📷 Please upload an image first.")
         st.stop()
 
     if not question.strip():
 
-        st.warning(
-            "❓ Please enter a question."
-        )
-
+        st.warning("❓ Please enter a question.")
         st.stop()
 
     if not answer.strip():
 
-        st.warning(
-            "🤖 Please enter an AI-generated answer."
-        )
-
+        st.warning("🤖 Please enter an AI-generated answer.")
         st.stop()
 
 
@@ -347,7 +425,7 @@ if run_analysis:
 
 
     # --------------------------------------------------------
-    # CREATE MODEL INPUT
+    # MODEL INPUT
     # --------------------------------------------------------
 
     X_input = pd.DataFrame(
@@ -377,10 +455,7 @@ if run_analysis:
     # HALLUCINATION PROBABILITY
     # --------------------------------------------------------
 
-    if hasattr(
-        firewall_model,
-        "predict_proba"
-    ):
+    if hasattr(firewall_model, "predict_proba"):
 
         probabilities = firewall_model.predict_proba(
             X_input
@@ -390,7 +465,6 @@ if run_analysis:
             firewall_model.classes_
         )
 
-        # Project convention:
         # 0 = Hallucinated
         # 1 = Supported
 
@@ -412,13 +486,6 @@ if run_analysis:
     else:
 
         hallucination_probability = 0.0
-
-
-    # --------------------------------------------------------
-    # FIREWALL THRESHOLD
-    # --------------------------------------------------------
-
-    THRESHOLD = 0.30
 
 
     # --------------------------------------------------------
@@ -444,8 +511,20 @@ if run_analysis:
         )
 
 
-    risk_percent = (
-        hallucination_probability * 100
+    risk_percent = hallucination_probability * 100
+
+
+    # --------------------------------------------------------
+    # HALLUCINATION TYPE
+    # --------------------------------------------------------
+
+    hallucination_type = determine_hallucination_type(
+        question,
+        answer,
+        image_question_similarity,
+        image_answer_similarity,
+        multimodal_grounding_score,
+        hallucination_probability
     )
 
 
@@ -474,6 +553,23 @@ if run_analysis:
 
 
     # ========================================================
+    # HALLUCINATION TYPE
+    # ========================================================
+
+    if decision == "HALLUCINATED":
+
+        st.warning(
+            f"🔎 Hallucination Type: {hallucination_type}"
+        )
+
+    else:
+
+        st.info(
+            "🔎 Verification Type: Visually Supported Answer"
+        )
+
+
+    # ========================================================
     # RISK
     # ========================================================
 
@@ -481,14 +577,12 @@ if run_analysis:
 
     risk_col1, risk_col2 = st.columns([1, 2])
 
-
     with risk_col1:
 
         st.metric(
             "Hallucination Probability",
             f"{risk_percent:.1f}%"
         )
-
 
     with risk_col2:
 
@@ -527,9 +621,7 @@ if run_analysis:
 
     st.subheader("🔬 Multimodal Evidence Analysis")
 
-
     score1, score2, score3 = st.columns(3)
-
 
     with score1:
 
@@ -538,14 +630,12 @@ if run_analysis:
             f"{image_question_similarity:.4f}"
         )
 
-
     with score2:
 
         st.metric(
             "Image ↔ Answer",
             f"{image_answer_similarity:.4f}"
         )
-
 
     with score3:
 
@@ -563,41 +653,52 @@ if run_analysis:
         "🧠 Why did the Firewall decide this?"
     )
 
-
     if decision == "SUPPORTED":
 
-        st.info(
+        st.success(
             f"""
-            The AI answer demonstrates sufficient alignment
-            with the visual evidence.
+### 🟢 Visual evidence supports the answer
 
-            **Multimodal Grounding Score:**
-            {multimodal_grounding_score:.4f}
+The AI answer shows sufficient alignment with
+the uploaded image.
 
-            **Hallucination Risk:**
-            {risk_percent:.1f}%
+**Grounding Score:** {multimodal_grounding_score:.4f}
 
-            The calculated risk is below the firewall threshold
-            of {THRESHOLD:.2f}.
-            """
+**Hallucination Risk:** {risk_percent:.1f}%
+
+**Firewall Status:** Supported
+
+The calculated risk is below the firewall threshold
+of **{THRESHOLD:.2f}**.
+"""
         )
 
     else:
 
-        st.warning(
+        st.error(
             f"""
-            The AI answer demonstrates insufficient alignment
-            with the visual evidence.
+### 🔴 Potential hallucination detected
 
-            **Multimodal Grounding Score:**
-            {multimodal_grounding_score:.4f}
+The AI answer is not sufficiently grounded in the
+visual evidence.
 
-            **Hallucination Risk:**
-            {risk_percent:.1f}%
+**Detected Type:** {hallucination_type}
 
-            The calculated risk exceeds the firewall threshold
-            of {THRESHOLD:.2f}.
-            """
+**Image–Answer Similarity:**
+{image_answer_similarity:.4f}
+
+**Grounding Score:**
+{multimodal_grounding_score:.4f}
+
+**Hallucination Risk:**
+{risk_percent:.1f}%
+
+The calculated risk exceeds the firewall threshold
+of **{THRESHOLD:.2f}**.
+
+**Recommendation:** Review the AI answer against
+the uploaded image before accepting it.
+"""
         )
 
 
@@ -607,9 +708,7 @@ if run_analysis:
 
     st.subheader("⚙️ Verification Pipeline")
 
-
     p1, p2, p3, p4 = st.columns(4)
-
 
     with p1:
 
@@ -618,7 +717,6 @@ if run_analysis:
             "Visual Evidence"
         )
 
-
     with p2:
 
         st.info(
@@ -626,14 +724,12 @@ if run_analysis:
             "Multimodal Features"
         )
 
-
     with p3:
 
         st.info(
             "⚡ **SVM**\n\n"
             "Risk Prediction"
         )
-
 
     with p4:
 
@@ -660,9 +756,7 @@ st.divider()
 
 st.header("⚙️ Model Information")
 
-
 model_col1, model_col2, model_col3 = st.columns(3)
-
 
 with model_col1:
 
@@ -671,7 +765,6 @@ with model_col1:
         "CLIP ViT-B/32"
     )
 
-
 with model_col2:
 
     st.metric(
@@ -679,12 +772,11 @@ with model_col2:
         "SVM"
     )
 
-
 with model_col3:
 
     st.metric(
         "Firewall Threshold",
-        "0.30"
+        f"{THRESHOLD:.2f}"
     )
 
 
