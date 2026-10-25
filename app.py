@@ -1,5 +1,5 @@
-
 import re
+import sys
 from pathlib import Path
 
 import joblib
@@ -22,15 +22,34 @@ st.set_page_config(
 
 BASE_DIR = Path(__file__).resolve().parent
 
+# Comprehensive list of model candidates to support all execution environments
+# (local development, inner folder structure, root structure, and Streamlit Cloud)
 MODEL_CANDIDATES = [
+    BASE_DIR / "hallucination_firewall_corrected_bundle (3).joblib",
     BASE_DIR / "hallucination_firewall_corrected_bundle.joblib",
+    BASE_DIR / "models" / "hallucination_firewall_bundle.joblib",
     BASE_DIR / "models" / "hallucination_firewall_corrected_bundle.joblib",
+    BASE_DIR / "hallucination-firewall-main" / "hallucination_firewall_corrected_bundle (3).joblib",
+    BASE_DIR / "hallucination-firewall-main" / "models" / "hallucination_firewall_bundle.joblib",
+    BASE_DIR.parent / "hallucination_firewall_corrected_bundle (3).joblib",
+    BASE_DIR.parent / "hallucination-firewall-main" / "hallucination_firewall_corrected_bundle (3).joblib",
 ]
 
-MODEL_PATH = next(
-    (path for path in MODEL_CANDIDATES if path.is_file()),
-    MODEL_CANDIDATES[0],
-)
+# Discover the first candidate that exists on disk
+found_model = next((path for path in MODEL_CANDIDATES if path.is_file()), None)
+if not found_model:
+    # Dynamic fallback: search for any bundle joblib file
+    glob_matches = (
+        list(BASE_DIR.glob("*bundle*.joblib"))
+        + list((BASE_DIR / "models").glob("*bundle*.joblib"))
+        + list((BASE_DIR / "hallucination-firewall-main").glob("*bundle*.joblib"))
+        + list(BASE_DIR.parent.glob("*bundle*.joblib"))
+    )
+    if glob_matches:
+        found_model = glob_matches[0]
+
+MODEL_PATH = found_model if found_model else MODEL_CANDIDATES[0]
+MODEL_NAME = MODEL_PATH.name
 
 DEFAULT_THRESHOLD = 0.27
 CLIP_MODEL_NAME = "ViT-B-32"
@@ -143,16 +162,97 @@ def load_clip(model_name, pretrained):
 
 
 # ============================================================
-# QUESTION PARSING
+# QUESTION PARSING & OBJECT EXTRACTION
 # ============================================================
+META_WORDS = {"image", "picture", "photo", "scene", "photograph", "frame"}
+
+PLURAL_MAP = {
+    "people": "person",
+    "men": "man",
+    "women": "woman",
+    "children": "child",
+    "mice": "mouse",
+    "teeth": "tooth",
+    "feet": "foot",
+    "geese": "goose",
+}
+
+
+def singularize(word):
+    w = word.strip().lower()
+    if w in PLURAL_MAP:
+        return PLURAL_MAP[w]
+    if w.endswith("ies") and len(w) > 4:
+        return w[:-3] + "y"
+    if w.endswith("es") and len(w) > 3 and (
+        w.endswith("shes") or w.endswith("ches") or w.endswith("sses") or w.endswith("xes")
+    ):
+        return w[:-2]
+    if w.endswith("s") and not w.endswith("ss") and len(w) > 3:
+        return w[:-1]
+    return w
+
+
+def clean_extracted_object(raw_text):
+    if not raw_text:
+        return None
+    cleaned = re.sub(r"[^\w\s-]", " ", raw_text).strip()
+    cleaned = re.sub(
+        r"^(?:neither|another|some|not|any|the|one|no|an|a)\b\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    tokens = [t for t in cleaned.split() if t.lower() not in META_WORDS]
+    while tokens and tokens[-1].lower() in {
+        "parked", "standing", "sitting", "placed", "lying",
+        "nearby", "here", "there", "visible", "present", "around"
+    }:
+        tokens.pop()
+    if not tokens:
+        return None
+    res = " ".join(tokens)
+    words = res.split()
+    if words:
+        words[-1] = singularize(words[-1])
+        res = " ".join(words)
+    return res if res else None
+
+
 def extract_target_object(question):
     q = str(question).strip().rstrip("?.! ")
 
+    # 1. Color / Attribute questions: "What color is the car?", "What color is a dog?"
+    m = re.search(
+        r"\b(?:what\s+color\s+(?:is|are))\s+(?:a|an|the|any)?\s*(.+)",
+        q,
+        re.IGNORECASE,
+    )
+    if m:
+        extracted = clean_extracted_object(m.group(1))
+        if extracted:
+            return extracted
+
+    # 2. Counting questions: "How many people are in the image?", "How many cars..."
+    m = re.search(
+        r"\b(?:how\s+many)\s+(.+?)(?:\s+(?:are|is)\b|\s+in\s+|\?|$)",
+        q,
+        re.IGNORECASE,
+    )
+    if m:
+        extracted = clean_extracted_object(m.group(1))
+        if extracted:
+            return extracted
+
+    # 3. Standard existence patterns
     patterns = [
         r"^(?:is there|are there any|are there)\s+"
         r"(?:a|an|the|any)?\s*(.+?)\s+"
         r"(?:in|inside|visible in)\s+"
         r"(?:the|this|an?)\s+(?:image|picture|photo)$",
+
+        r"^(?:is there|are there any|are there)\s+"
+        r"(?:a|an|the|any)?\s*(.+)$",
 
         r"^(?:is|are)\s+(.+?)\s+present\s+"
         r"(?:in|inside)\s+(?:the|this)\s+"
@@ -161,22 +261,33 @@ def extract_target_object(question):
         r"^does\s+(?:the|this)\s+image\s+contain\s+(.+)$",
 
         r"^does\s+(?:the|this)\s+image\s+have\s+(.+)$",
+
+        r"^(?:do you see|can you see|can you find)\s+"
+        r"(?:a|an|the|any)?\s*(.+?)(?:\s+(?:in|inside|on)\s+.*)?$",
+
+        r"^(?:there is|there are)\s+"
+        r"(?:a|an|the|any)?\s*(.+?)(?:\s+(?:in|inside|on)\s+.*)?$",
     ]
 
     for pattern in patterns:
         match = re.match(pattern, q, flags=re.IGNORECASE)
-
         if match:
             obj = match.group(1).strip(" .?!")
-            obj = re.sub(
-                r"^(?:a|an|the|any)\s+",
-                "",
-                obj,
-                flags=re.IGNORECASE,
-            ).strip()
+            extracted = clean_extracted_object(obj)
+            if extracted:
+                return extracted
 
-            if obj:
-                return obj
+    # 4. Fallback: extract last non-meta substantive word
+    tokens = [
+        t for t in re.sub(r"[^\w\s]", "", q).split()
+        if t.lower() not in META_WORDS
+        and t.lower() not in {
+            "is", "there", "are", "do", "you", "see", "can", "find",
+            "present", "in", "the", "a", "an", "what", "how", "many", "color"
+        }
+    ]
+    if tokens:
+        return clean_extracted_object(tokens[-1])
 
     return None
 
@@ -205,6 +316,8 @@ def infer_answer_claim(answer):
         r"\bdo not see\b",
         r"\bdon't see\b",
         r"\babsent\b",
+        r"\bisn't\b",
+        r"\baren't\b",
     ]
 
     if any(re.search(p, a) for p in negative_patterns):
@@ -223,7 +336,8 @@ def infer_answer_claim(answer):
     if any(re.search(p, a) for p in positive_patterns):
         return 1
 
-    return None
+    # Fallback: if substantive answer with no negation, treat as positive claim
+    return 1 if len(a) > 0 else None
 
 
 # ============================================================
@@ -363,6 +477,11 @@ with st.sidebar:
     )
 
     st.divider()
+    st.subheader("Model Status")
+    st.write(f"**Discovered Path:** `{MODEL_PATH.name}`")
+    st.write(f"**Status:** {'Found on disk' if MODEL_PATH.is_file() else 'Missing'}")
+
+    st.divider()
     st.subheader("Supported scope")
 
     st.write("- Object-presence questions")
@@ -462,30 +581,30 @@ if run_analysis:
 
     try:
         if not MODEL_PATH.is_file():
-    st.error("Model bundle not found in the deployed app.")
+            st.error("Model bundle not found in the deployed app.")
 
-    st.write("**App directory:**", str(BASE_DIR))
-    st.write("**Expected filename:**", MODEL_NAME)
+            st.write("**App directory:**", str(BASE_DIR))
+            st.write("**Expected filename:**", MODEL_NAME)
 
-    st.write("**Files visible to Streamlit:**")
-    visible_files = [
-        str(p.relative_to(BASE_DIR))
-        for p in BASE_DIR.rglob("*")
-        if p.is_file()
-    ]
+            st.write("**Files visible to Streamlit:**")
+            visible_files = [
+                str(p.relative_to(BASE_DIR))
+                for p in BASE_DIR.rglob("*")
+                if p.is_file()
+            ]
 
-    st.code(
-        "\n".join(visible_files[:100])
-        if visible_files
-        else "No files found"
-    )
+            st.code(
+                "\n".join(visible_files[:100])
+                if visible_files
+                else "No files found"
+            )
 
-    st.warning(
-        "Check whether the model appears in this list. "
-        "If it does not, the deployed repository/branch "
-        "does not contain the model file."
-    )
-    st.stop()
+            st.warning(
+                "Check whether the model appears in this list. "
+                "If it does not, the deployed repository/branch "
+                "does not contain the model file."
+            )
+            st.stop()
 
         with st.spinner(
             "Loading model and analyzing visual evidence..."
@@ -694,6 +813,7 @@ st.subheader("⚙️ Model Information")
 
 st.write("**Vision-language encoder:** CLIP ViT-B/32")
 st.write("**Classifier:** RBF SVM with probability estimates")
+st.write(f"**Active Model File:** `{MODEL_NAME}`")
 st.write("**Feature count:** 8")
 
 st.caption(
