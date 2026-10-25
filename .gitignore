@@ -1,0 +1,25 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Cache directories
+.cache/
+.pytest_cache/
+
+# Streamlit local config & state
+.streamlit/
+
+# Backups and temporary test scratch
+backup_*/
+*.backup
+scratch/
+test_sample_image.png
+
+# Local unzipped extraction directory
+hallucination-firewall-main/
