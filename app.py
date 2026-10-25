@@ -461,14 +461,31 @@ if run_analysis:
         st.stop()
 
     try:
-        if not MODEL_PATH.exists():
-            st.error(
-                "The model bundle is missing.\n\n"
-                f"Expected location: {MODEL_PATH}\n\n"
-                "Upload the corrected model bundle to the "
-                "same repository folder as app.py."
-            )
-            st.stop()
+        if not MODEL_PATH.is_file():
+    st.error("Model bundle not found in the deployed app.")
+
+    st.write("**App directory:**", str(BASE_DIR))
+    st.write("**Expected filename:**", MODEL_NAME)
+
+    st.write("**Files visible to Streamlit:**")
+    visible_files = [
+        str(p.relative_to(BASE_DIR))
+        for p in BASE_DIR.rglob("*")
+        if p.is_file()
+    ]
+
+    st.code(
+        "\n".join(visible_files[:100])
+        if visible_files
+        else "No files found"
+    )
+
+    st.warning(
+        "Check whether the model appears in this list. "
+        "If it does not, the deployed repository/branch "
+        "does not contain the model file."
+    )
+    st.stop()
 
         with st.spinner(
             "Loading model and analyzing visual evidence..."
