@@ -20,9 +20,16 @@ st.set_page_config(
     layout="wide",
 )
 
-MODEL_PATH = (
-    Path(__file__).resolve().parent
-    / "hallucination_firewall_corrected_bundle.joblib"
+BASE_DIR = Path(__file__).resolve().parent
+
+MODEL_CANDIDATES = [
+    BASE_DIR / "hallucination_firewall_corrected_bundle.joblib",
+    BASE_DIR / "models" / "hallucination_firewall_corrected_bundle.joblib",
+]
+
+MODEL_PATH = next(
+    (path for path in MODEL_CANDIDATES if path.is_file()),
+    MODEL_CANDIDATES[0],
 )
 
 DEFAULT_THRESHOLD = 0.27
